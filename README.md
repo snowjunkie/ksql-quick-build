@@ -10,10 +10,7 @@ Quickly enable a ksql environment for learning.
 * Don't lock-out future ideas.
 
 ## Basic Scenario
-We have orders moving through a web store.
-Each order transitions through various states as it is processed.
-At any point in time, we need to query an order's current state using the order ID.
-The life of orders is in days, and so we'll assume kafka topic retention simply rolls-off older data.
+1. We have orders moving through a web store.
 
 ## TLDR - Let me just get it running!
 Ok for those who can't wait, the instructions are as follows:
