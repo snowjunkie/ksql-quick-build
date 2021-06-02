@@ -11,40 +11,44 @@ Quickly enable a ksql environment for learning.
 
 ## Basic Scenario
 1. We have orders moving through a web store.
+2. Each order transitions through various states as it is processed.
+3. At any point in time, we need to query an order's current state using the order ID.
+4. The life of orders is in days, and so we'll assume kafka topic retention simply rolls-off older data.
 
 ## TLDR - Let me just get it running!
 Ok for those who can't wait, the instructions are as follows:
-l. Clone the repo.
-l. Run **docker-compose up -d**.
-l. Wait for all services to be ready.
-l. Run **docker-compose ps** to check the state of services.
-l. Now let's launch a KSQL Client interactive session to check the state of our objects.
-l. Run **docker-compose exec ksqldb-cli ksql http://primary-ksqldb-server:8088**.
-l. This should result in a ksql prompt: **ksql >**
-l. Let's first check that we have all our objects as expected.
-l. Run the following, hitting enter after each to see the results.
-   l. **SHOW TOPICS;**
-   l. **SHOW STREAMS;**
-   l. **SHOW TABLES;**
-l. You will see some internal kafka and ksql objects too, but you should see the following:
-   l. Topics - *orders*, *companies*, *spare*
-   l. Streams - *S_ORDERS*
-   l. Tables - *T_ORDERS*
-l. If that worked, you are all set.
-   l. If it didn't, try looking at the logs using **docker-compose logs**
-   l. You can also look specifically at the logs for a given image by using **docker-compose logs [image-name]**
+1. Clone the repo.
+2. Run **docker-compose up -d**.
+3. Wait for all services to be ready.
+4. Run **docker-compose ps** to check the state of services.
+5. Now let's launch a KSQL Client interactive session to check the state of our objects.
+6. Run **docker-compose exec ksqldb-cli ksql http://primary-ksqldb-server:8088**.
+7. This should result in a ksql prompt: **ksql >**
+8. Let's first check that we have all our objects as expected.
+9. Run the following, hitting enter after each to see the results.
+   9a. **SHOW TOPICS;**
+   9b. **SHOW STREAMS;**
+   9c. **SHOW TABLES;**
+10. You will see some internal kafka and ksql objects too, but you should see the following:
+   10a. Topics - *orders*, *companies*, *spare*
+   10b. Streams - *S_ORDERS*
+   10c. Tables - *T_ORDERS*
+11. If that worked, you are all set.
+   11a. If it didn't, try looking at the logs using **docker-compose logs**
+   11b. You can also look specifically at the logs for a given image by using **docker-compose logs [image-name]**
 
 ### Creating some events
-Drop one of the *json* files from the */data-files* folder into the */data* folder.
-This feeds the file parser, which will read each line into a new *order-event* and publish that event to the *orders* topic in Kafka.
-From there the KSQL magic will turn it into a stream and an aggregate table.
-Now in your KSQL Client (launched just before) try the following query:
-* **SELECT * FROM t_orders WHERE O_ID IN ('001','002','003','004','005');**
-* Alternatively, I could have used a *BETWEEN* clause.
+1. Drop one of the *json* files from the */data-files* folder into the */data* folder.
+2. This feeds the file parser, which will read each line into a new *order-event* and publish that event to the *orders* topic in Kafka.
+3. From there the KSQL magic will turn it into a stream and an aggregate table.
+4. Now in your KSQL Client (launched just before) try the following query:
+   * **SELECT * FROM t_orders WHERE O_ID IN ('001','002','003','004','005');**
+   * Alternatively, I could have used a *BETWEEN* clause.
+
 That should get you going enough to start playing around with running KSQL Queries.
 *Have Fun!*
 
-# The Gory Details
+# The Geeky Details
 Here's where I delve deep into the way I pulled all this together.
 I hope you find it useful and can use some of these concepts and approaches in your own projects.
 
