@@ -1,0 +1,164 @@
+# Docker compose from bringing up a local ksqlDB cluster and dependencies.
+#
+# By default, the cluster has two ksqlDB servers. You can scale the number of ksqlDB nodes in the
+# cluster by using the docker `--scale` command line arg.
+#
+# e.g. for a 4 node cluster run:
+# > docker-compose up --scale additional-ksqldb-server=3
+#
+# or a 1 node cluster run:
+# > docker-compose up --scale additional-ksqldb-server=0
+#
+# The default is one `primary-ksqldb-server` and one `additional-ksqdb-server`. The only
+# difference is that the primary node has a well-known port exposed so clients can connect, where
+# as the additional nodes use auto-port assignment so that ports don't clash.
+#
+# If you wish to run with locally built ksqlDB docker images then:
+#
+# 1. Follow the steps in https://github.com/confluentinc/ksql/blob/master/ksqldb-docker/README.md
+# to build a ksqlDB docker image with local changes.
+#
+# 2. Update .env file to use your local images by setting KSQL_IMAGE_BASE=placeholder/ and KSQL_VERSION=local.build.
+
+---
+version: '2'
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:${CP_VERSION}
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 32181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-enterprise-kafka:${CP_VERSION}
+    ports:
+      - "29092:29092"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:32181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:${CP_VERSION}
+    depends_on:
+      - zookeeper
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: zookeeper:32181
+
+  primary-ksqldb-server:
+    image: ${KSQL_IMAGE_BASE}confluentinc/ksqldb-server:${KSQL_VERSION}
+    hostname: primary-ksqldb-server
+    container_name: primary-ksqldb-server
+    depends_on:
+      - kafka
+      - schema-registry
+    ports:
+      - "8088:8088"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      KSQL_KSQL_LOGGING_PROCESSING_STREAM_AUTO_CREATE: "true"
+      KSQL_KSQL_LOGGING_PROCESSING_TOPIC_AUTO_CREATE: "true"
+
+  additional-ksqldb-server:
+    image: ${KSQL_IMAGE_BASE}confluentinc/ksqldb-server:${KSQL_VERSION}
+    hostname: additional-ksqldb-server
+    depends_on:
+      - primary-ksqldb-server
+    ports:
+      - "8090"
+    environment:
+      KSQL_LISTENERS: http://0.0.0.0:8090
+      KSQL_BOOTSTRAP_SERVERS: kafka:9092
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+
+  # Access the cli by running:
+  # > docker-compose exec ksqldb-cli  ksql http://primary-ksqldb-server:8088
+  ksqldb-cli:
+    image: ${KSQL_IMAGE_BASE}confluentinc/ksqldb-cli:${KSQL_VERSION}
+    container_name: ksqldb-cli
+    depends_on:
+      - primary-ksqldb-server
+    entrypoint: /bin/sh
+    tty: true
+  
+  # This "container" is a utility to pre-create kafka topics
+  # The base image is Kafka in order to include the kafka utilities
+  # First is a wait for Kafka to be ready (using Confluent Utility Belt - cub), then Kafka topics are created
+  kafka-setup:
+    image: confluentinc/cp-enterprise-kafka:${CP_VERSION}
+    hostname: kafka-setup
+    container_name: kafka-setup
+    depends_on:
+      - kafka
+      - schema-registry
+      - primary-ksqldb-server
+    volumes:
+      - $PWD/connectors:/tmp/connectors
+      - $PWD/dashboard:/tmp/dashboard
+    command: "bash -c 'echo Waiting for Kafka to be ready... && \
+                           cub kafka-ready -b kafka:9092 1 40 && \
+                           echo Kafka appears Ready... && \
+                           kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic orders && \
+                           kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic companies && \
+                           kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 1 --replication-factor 1 --topic spare && \
+                           echo Waiting 30 seconds for dramatic effect... && \
+                           sleep 30 && \
+                           echo Waiting for KSQLDB API to be Ready... && \
+                           cub ksql-server-ready primary-ksqldb-server 8088 30 && \
+                           sleep 20 && \
+                           echo Closing out... && \
+                           sleep 20 && \
+                           echo Done.'"
+    environment:
+      # The following settings are listed here only to satisfy the image's requirements.
+      # We override the image's `command` anyways, hence this container will not start a broker.
+      KAFKA_BROKER_ID: ignored
+      KAFKA_ZOOKEEPER_CONNECT: ignored
+
+  # This is a ksql setup utility container
+  # It will call a script against ksql in order to create streams and tables as desired
+  ksql-setup:
+    image: ${KSQL_IMAGE_BASE}confluentinc/ksqldb-cli:${KSQL_VERSION}
+    container_name: ksql-setup
+    depends_on:
+      - kafka-setup
+    volumes:
+      - $PWD/ksql-scripts/:/data/scripts/
+    entrypoint: 
+      - /bin/bash
+      - -c
+      - |
+        echo -e "\n\n Waiting for KSQL to be available before launching CLI\n"
+        while [ $$(curl -s -o /dev/null -w %{http_code} http://primary-ksqldb-server:8088/) -eq 000 ]
+        do
+          echo -e $$(date) "KSQL Server HTTP state: " $$(curl -s -o /dev/null -w %{http_code} http://primary-ksqldb-server:8088/) " (waiting for 200)"
+          sleep 5
+        done
+        echo -e "\n\n-> Running KSQL commands\n"
+        cat /data/scripts/ksql-prep-script.sql <(echo 'EXIT')| ksql http://primary-ksqldb-server:8088
+        echo -e "\n\n-> Sleeping…\n"
+        sleep infinity
+
+  # This container provides the kafka data injest ability from files
+  fluent-bit:
+    image: fluent/fluent-bit
+    volumes:
+      - ./fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+      - ./data:/data
+    depends_on:
+      - kafka-setup
+
+
+
